@@ -4,8 +4,8 @@ use sycamore::prelude::*;
 pub fn OptionsMenu<G: Html>(cx: Scope) -> View<G> {
     view! { cx, 
         ul {
-            li {"game"}
-            li {"display"}
+            li {"Game"}
+            li {"Display"}
         }
     }
 }

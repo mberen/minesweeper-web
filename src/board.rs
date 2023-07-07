@@ -2,58 +2,286 @@ mod options_menu;
 mod bomb_display;
 mod reset_button;
 mod timer_display;
-mod cell;
+
 
 use sycamore::prelude::*;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
+use web_sys::{MouseEvent, console};
+
 use options_menu::OptionsMenu;
 use bomb_display::BombDisplay;
 use reset_button::ResetButton;
 use timer_display::TimerDisplay;
-use cell::Cell;
+
+#[derive(Debug, Clone)]
+pub struct BoardState {
+    cells: RcSignal<Vec<RcSignal<Cell>>>,
+    params: RcSignal<Params>,
+    game_status: RcSignal<GameStatus>
+}
 
 #[component]
-pub fn Board<G: Html>(cx: Scope) -> View<G> {
-    let game_state = create_signal(cx, GameState::InProgress);
-    
-    let default_params = Params {height: 10, width: 10, mines: 10};
-    let params = create_signal(cx, default_params);
+pub fn Board<G: Html>(cx: Scope) -> View<G> {    
+    let default_params = Params {height: 4, width: 4, mines: 1};
 
-    let num_flags = create_signal(cx, 0);
+    let board_state = BoardState::new(default_params);
+    let board_state_ref = create_ref(cx, board_state.clone());
 
-
+    let num_flags = create_signal(cx, 0isize);
+    provide_context_ref(cx, num_flags);
 
     view! { cx,
-        div (class="board") {
+        div (class="board", 
+            on:contextmenu=|e: MouseEvent| e.prevent_default(),
+            style=format!("--row-length: {}", board_state_ref.params.get().width),
+        ) {
             div (class="options") { OptionsMenu {} }
-            div (class="display panel") {
-                BombDisplay (num_flags=num_flags, num_bombs=(params.get().mines)) {}
-                ResetButton (game_state=game_state) {}
+            div (class="displayPanel") {
+                BombDisplay (num_bombs=(board_state.params.get().mines)) {}
+                ResetButton (board_state=board_state_ref) {}
                 TimerDisplay {}
             }            
-            div (class="cell grid") {
-
+            div (class="cellGrid") {
+                (board_state_ref.view(cx))
             }
+        }
+    }
+}
+
+
+impl BoardState {
+    fn new (params: Params) -> BoardState {
+        let Params {height, width, mines} = params;
+        let mut cells = vec!(Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: 0}; height*width);
+    
+        for i in 0..mines {
+            cells[i] = Cell::Mine{cell_status: CellStatus::Hidden, id: 0};
+        }
+        cells.shuffle(&mut thread_rng());
+        for (i, cell) in cells.iter_mut().enumerate() {
+            match cell {
+                Cell::Mine{cell_status: s, id: _} => *cell=Cell::Mine{cell_status: (*s).clone(), id: i},
+                Cell::Empty{cell_status: s, mines:m, id: _} => *cell=Cell::Empty{cell_status: (*s).clone(), mines: *m, id: i},
+            }
+        }
+
+        let cells: Vec<RcSignal<Cell>> = 
+            cells
+            .into_iter()
+            .map(|c|create_rc_signal(c))
+            .collect();
+    
+        let board_state = BoardState {
+            cells: create_rc_signal(cells),
+            params: create_rc_signal(params),
+            game_status: create_rc_signal(GameStatus::InProgress),
+        };
+    
+        for i in 0..board_state.cells.get().len() {
+            if let Cell::Empty{..} = *board_state.cells.get()[i].get() {
+                let adjacent_bombs = board_state.get_adjacent_bombs(i);
+                board_state.cells.get()[i].set(Cell::Empty{cell_status: CellStatus::Hidden, mines: adjacent_bombs, id: i});
+            }
+        }
+    
+        board_state
+    }
+
+    fn reset(&self, cx: Scope, params: &Params) {
+        let new_state = Self::new(*params);
+        let cells = (*new_state.cells.get()).clone();
+        self.cells.set(cells);
+
+        let num_flags = use_context::<Signal<isize>>(cx);
+        num_flags.set(0);
+    }
+
+    //converts the cell vec to our desired html view (list of cells)
+    fn view<'a, G: Html> (&'a self, cx: Scope<'a>) -> View<G> {
+
+        let cells: &RcSignal<Vec<RcSignal<Cell>>> = create_ref(cx, self.cells.clone());
+
+        view! { cx,
+            ul {
+                Indexed(
+                    iterable=cells,
+                    view=|cx, cell| {
+                        let cell_ref = create_ref(cx, cell.clone());
+                        view! { cx, 
+                            li (class=(cell_ref.get().get_id()),
+                                on:click =|_| Self::cell_click(self, cell_ref),
+                                on:auxclick =move |click| Self::cell_aux_click(cx, cell_ref, click),) {
+                                (
+                                    match *cell.get() {
+                                        Cell::Mine{cell_status: CellStatus::Flagged, ..} => "🚩".to_string(),
+                                        Cell::Empty{cell_status: CellStatus::Flagged, ..} => "🚩".to_string(),
+                                        Cell::Mine{cell_status: CellStatus::Hidden, ..} => "🔳".to_string(),
+                                        Cell::Empty{cell_status: CellStatus::Hidden, ..} => "🔳".to_string(),
+                                        Cell::Mine{cell_status: CellStatus::Revealed, ..} => "💥".to_string(),
+                                        Cell::Empty{cell_status: CellStatus::Revealed, mines: n, ..} => {
+                                            let c = char::from_digit(n, 10).expect("Adjacency always 9 or less");
+                                            format!("{c} ")
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    fn cell_click(&self, cell: &RcSignal<Cell>) {
+        let msg = format!("{:?}", *cell.get());
+        console::log_1(&msg.into());
+        match *cell.get() {
+            ref c @ Cell::Mine{cell_status: CellStatus::Hidden, ..}=> cell.set(c.new_status(CellStatus::Revealed)),
+            Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: move_index} => self.reveal_adjacent(move_index),
+            ref c @ Cell::Empty{cell_status: CellStatus::Hidden, ..} => cell.set(c.new_status(CellStatus::Revealed)),
+            _ => (),
+        }
+    }
+
+    fn cell_aux_click(cx: Scope, cell: &RcSignal<Cell>, click: MouseEvent) {
+        let button = click.button();
+        let num_flags = use_context::<Signal<isize>>(cx);
+        match (&*cell.get(), button) {
+            (c @ Cell::Mine{cell_status: CellStatus::Flagged, ..}, 2) => {
+                cell.set(c.new_status(CellStatus::Hidden));
+                num_flags.set(*num_flags.get() - 1);
+            },
+            (c @ Cell::Empty{cell_status: CellStatus::Flagged, ..}, 2) => {
+                cell.set(c.new_status(CellStatus::Hidden));
+                num_flags.set(*num_flags.get() - 1);
+            },
+            (c @ Cell::Mine{cell_status: CellStatus::Hidden, ..}, 2) => {
+                cell.set(c.new_status(CellStatus::Flagged));
+                num_flags.set(*num_flags.get() + 1);
+            },
+            (c @ Cell::Empty{cell_status: CellStatus::Hidden, ..}, 2) => {
+                cell.set(c.new_status(CellStatus::Flagged));
+                num_flags.set(*num_flags.get() + 1);
+            },
+            _ => (),
+        };
+    }
+
+    pub fn get_coord_index(&self, Coordinate(x, y): &Coordinate) -> usize {
+        y*self.params.get().width + x % self.params.get().height
+    }
+
+    pub fn get_coord_from_index(&self, index: usize) -> Coordinate {
+        let x = index % self.params.get().width;
+        let y = index / self.params.get().height;
+
+        Coordinate(x, y)
+    }
+
+    pub fn get_adjacent(&self, i: usize) -> Vec<(usize, usize)>{
+        let Coordinate(x, y) = self.get_coord_from_index(i);
+
+        let adjacent_matrix: [(isize, isize); 9] = [ (-1, -1), (0, -1), (1, -1),
+                                                    (-1, 0), (0, 0), (1, 0),
+                                                    (-1, 1), (0, 1), (1, 1)];
+    
+        adjacent_matrix
+            .iter()
+            .map(|(dx, dy)| (x as isize+dx, y as isize+dy))
+            .filter(|(x, y)| *x >= 0 && *y >= 0)
+            .map(|(x, y)| { (x as usize, y as usize) })
+            .filter(|(x, y)| *x < self.params.get().width && *y < self.params.get().height)
+            .collect()
+    }    
+    
+    pub fn get_adjacent_bombs(&self, i: usize) -> u32 {
+        let adjacent_list =self.get_adjacent(i);
+
+        let mut count = 0;
+        for (x, y) in adjacent_list {
+            let c = Coordinate(x, y);
+            if let Cell::Mine{..} = *self.cells.get()[self.get_coord_index(&c)].get()  {
+                count += 1;
+            };
+        };
+        count
+    }
+
+     fn reveal_adjacent(&self, i: usize) {
+        let adjacent_list =self.get_adjacent(i);
+
+        for (x, y) in adjacent_list {
+            let c = Coordinate(x, y);
+            let n = self.get_coord_index(&c);
+            let cell = self.cells.get()[n].get();
+
+            //let msg = format!("{:?}", cell);
+            //console::log_1(&msg.into());
+            
+            if let Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, ..} = *cell  {
+                if i != n {
+                    self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
+                    self.reveal_adjacent(n);
+                    let msg = format!("revealed {n}");
+                    console::log_1(&msg.into());
+                }
+                else {
+                    self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
+                    let msg = format!("revealed {n}");
+                    console::log_1(&msg.into());
+
+                }
+            } else { 
+                self.cells.get()[n].set(cell.new_status(CellStatus::Revealed)); 
+                let msg = format!("revealed {n}");
+                console::log_1(&msg.into());
+            } 
 
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum GameState {
+pub enum GameStatus {
     Won,
     Lost,
     InProgress,
 }
-
-impl std::fmt::Display for GameState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct Params {
+#[derive(Copy, Clone, Debug)]
+struct Params {
     pub height: usize,
     pub width: usize,
     pub mines: usize,
 }
+
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+enum Cell {
+    Mine {cell_status: CellStatus, id: usize},
+    Empty {cell_status: CellStatus, mines: u32, id: usize},
+}
+
+impl Cell {
+    fn new_status(&self, status: CellStatus) -> Self {
+        match self {
+            Cell::Mine {cell_status: _, id: i} => Cell::Mine {cell_status: status, id: *i},
+            Cell::Empty {cell_status: _, mines: n, id: i} => Cell::Empty {cell_status: status, mines: *n, id: *i},
+        }
+    }
+    fn get_id(&self) -> usize {
+        match self {
+            Cell::Mine {id: i, ..} => *i,
+            Cell::Empty {id: i, ..} => *i,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub enum CellStatus {
+    Hidden,
+    Revealed,
+    Flagged,
+}
+
+#[derive(Debug, Clone)]
+pub struct Coordinate(pub usize, pub usize);

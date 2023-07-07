@@ -1,26 +1,33 @@
 use sycamore::prelude::*;
 
-use super::GameState;
+use super::GameStatus;
+use super::BoardState;
 
 #[derive(Props)]
 pub struct ResetButtonProps<'a> {
-    game_state: &'a Signal<GameState>
+    board_state: &'a BoardState,
 }
 
 #[component]
 pub fn ResetButton<'a, G: Html>(cx: Scope<'a>, props: ResetButtonProps<'a>) -> View<G> {
     view! { cx, 
-        div (class="reset button") {
-            button(on:click=|_| { change_state(props.game_state) }) {(props.game_state.get().to_string())}
+        div (class="resetButton") {
+            button(on:click=move |_| { handle_click(cx, &props.board_state.game_status, props.board_state) }) {
+                (
+                    match *props.board_state.game_status.get() {
+                        GameStatus::Won => "😎",
+                        GameStatus::Lost => "☹️",
+                        GameStatus::InProgress => "🔄"
+                    }
+                )
+            }
         }
     }
-    
 }
 
-fn change_state<'a> (game_state: &'a Signal<GameState>) {
-    match *game_state.get() {
-        GameState::Won => game_state.set(GameState::Lost) ,
-        GameState::Lost => game_state.set(GameState::InProgress) ,
-        GameState::InProgress => game_state.set(GameState::Won) ,
-    }
+fn handle_click (cx: Scope, game_status: &RcSignal<GameStatus>, board_state: &BoardState) {
+    game_status.set(GameStatus::InProgress);
+
+    let params = *board_state.params.get();
+    board_state.reset(cx, &params);
 }

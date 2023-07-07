@@ -14,8 +14,8 @@ pub fn TimerDisplay<G: Html>(cx: Scope) -> View<G> {
     });
 
     view! { cx,
-        div {
-            p { (time.get()) }
+        div (class="timer") {
+            (time.get()) 
         }
     }
 }
