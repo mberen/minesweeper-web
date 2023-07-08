@@ -26,24 +26,27 @@ pub fn Board<G: Html>(cx: Scope) -> View<G> {
     let default_params = Params {height: 4, width: 4, mines: 1};
 
     let board_state = BoardState::new(default_params);
-    let board_state_ref = create_ref(cx, board_state.clone());
+    provide_context(cx, board_state);
+    let board_state = use_context::<BoardState>(cx);
 
     let num_flags = create_signal(cx, 0isize);
     provide_context_ref(cx, num_flags);
 
+    let width = create_memo(cx, || (*board_state.params.get()).width);
+
     view! { cx,
         div (class="board", 
             on:contextmenu=|e: MouseEvent| e.prevent_default(),
-            style=format!("--row-length: {}", board_state_ref.params.get().width),
+            style=format!("--row-length: {}", width.get()),
         ) {
             div (class="options") { OptionsMenu {} }
             div (class="displayPanel") {
-                BombDisplay (num_bombs=(board_state.params.get().mines)) {}
-                ResetButton (board_state=board_state_ref) {}
+                BombDisplay {}
+                ResetButton {}
                 TimerDisplay {}
             }            
             div (class="cellGrid") {
-                (board_state_ref.view(cx))
+                (BoardState::view(cx))
             }
         }
     }
@@ -90,17 +93,19 @@ impl BoardState {
 
     fn reset(&self, cx: Scope, params: &Params) {
         let new_state = Self::new(*params);
-        let cells = (*new_state.cells.get()).clone();
-        self.cells.set(cells);
+
+        self.cells.set_rc(new_state.cells.get());
 
         let num_flags = use_context::<Signal<isize>>(cx);
         num_flags.set(0);
     }
 
     //converts the cell vec to our desired html view (list of cells)
-    fn view<'a, G: Html> (&'a self, cx: Scope<'a>) -> View<G> {
+    fn view<G: Html> (cx: Scope) -> View<G> {
 
-        let cells: &RcSignal<Vec<RcSignal<Cell>>> = create_ref(cx, self.cells.clone());
+        let board_state = use_context::<BoardState>(cx);
+
+        let cells: &RcSignal<Vec<RcSignal<Cell>>> = create_ref(cx, board_state.cells.clone());
 
         view! { cx,
             ul {
@@ -110,8 +115,8 @@ impl BoardState {
                         let cell_ref = create_ref(cx, cell.clone());
                         view! { cx, 
                             li (class=(cell_ref.get().get_id()),
-                                on:click =|_| Self::cell_click(self, cell_ref),
-                                on:auxclick =move |click| Self::cell_aux_click(cx, cell_ref, click),) {
+                                on:click =move |_| BoardState::cell_click(cx, cell_ref),
+                                on:auxclick =move |click| BoardState::cell_aux_click(cx, cell_ref, click),) {
                                 (
                                     match *cell.get() {
                                         Cell::Mine{cell_status: CellStatus::Flagged, ..} => "🚩".to_string(),
@@ -133,12 +138,13 @@ impl BoardState {
         }
     }
 
-    fn cell_click(&self, cell: &RcSignal<Cell>) {
-        let msg = format!("{:?}", *cell.get());
-        console::log_1(&msg.into());
+    fn cell_click(cx: Scope, cell: &RcSignal<Cell>) {
+        let board_state = use_context::<BoardState>(cx);
+        /*let msg = format!("{:?}", *cell.get());
+        console::log_1(&msg.into());*/
         match *cell.get() {
             ref c @ Cell::Mine{cell_status: CellStatus::Hidden, ..}=> cell.set(c.new_status(CellStatus::Revealed)),
-            Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: move_index} => self.reveal_adjacent(move_index),
+            Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: move_index} => board_state.reveal_adjacent(move_index),
             ref c @ Cell::Empty{cell_status: CellStatus::Hidden, ..} => cell.set(c.new_status(CellStatus::Revealed)),
             _ => (),
         }
@@ -223,19 +229,19 @@ impl BoardState {
                 if i != n {
                     self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
                     self.reveal_adjacent(n);
-                    let msg = format!("revealed {n}");
-                    console::log_1(&msg.into());
+                    //let msg = format!("revealed {n}");
+                    //console::log_1(&msg.into());
                 }
                 else {
                     self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
-                    let msg = format!("revealed {n}");
-                    console::log_1(&msg.into());
+                    //let msg = format!("revealed {n}");
+                    //console::log_1(&msg.into());
 
                 }
             } else { 
                 self.cells.get()[n].set(cell.new_status(CellStatus::Revealed)); 
-                let msg = format!("revealed {n}");
-                console::log_1(&msg.into());
+                //let msg = format!("revealed {n}");
+                //console::log_1(&msg.into());
             } 
 
         }
