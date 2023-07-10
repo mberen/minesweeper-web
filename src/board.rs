@@ -32,12 +32,15 @@ pub fn Board<G: Html>(cx: Scope) -> View<G> {
     let num_flags = create_signal(cx, 0isize);
     provide_context_ref(cx, num_flags);
 
-    let width = create_memo(cx, || (*board_state.params.get()).width);
+    let style = create_memo(cx, || {
+        let width =  (*board_state.params.get()).width;
+        format!("--row-length: {}", width)
+    });
 
     view! { cx,
         div (class="board", 
             on:contextmenu=|e: MouseEvent| e.prevent_default(),
-            style=format!("--row-length: {}", width.get()),
+            style=style,
         ) {
             div (class="options") { OptionsMenu {} }
             div (class="displayPanel") {
@@ -92,12 +95,13 @@ impl BoardState {
     }
 
     fn reset(&self, cx: Scope, params: &Params) {
-        let new_state = Self::new(*params);
-
-        self.cells.set_rc(new_state.cells.get());
-
         let num_flags = use_context::<Signal<isize>>(cx);
         num_flags.set(0);
+        
+        let new_state = Self::new(*params);
+        self.cells.set_rc(new_state.cells.get());
+        self.params.set_rc(new_state.params.get());
+        self.game_status.set_rc(new_state.game_status.get());
     }
 
     //converts the cell vec to our desired html view (list of cells)
@@ -105,7 +109,15 @@ impl BoardState {
 
         let board_state = use_context::<BoardState>(cx);
 
-        let cells: &RcSignal<Vec<RcSignal<Cell>>> = create_ref(cx, board_state.cells.clone());
+        //let cells: &RcSignal<Vec<RcSignal<Cell>>> = create_ref(cx, board_state.cells.clone());
+
+        let cells = create_memo(cx, || {
+            board_state.cells
+                .get()
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+        });
 
         view! { cx,
             ul {
@@ -140,14 +152,30 @@ impl BoardState {
 
     fn cell_click(cx: Scope, cell: &RcSignal<Cell>) {
         let board_state = use_context::<BoardState>(cx);
-        /*let msg = format!("{:?}", *cell.get());
-        console::log_1(&msg.into());*/
-        match *cell.get() {
-            ref c @ Cell::Mine{cell_status: CellStatus::Hidden, ..}=> cell.set(c.new_status(CellStatus::Revealed)),
-            Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: move_index} => board_state.reveal_adjacent(move_index),
-            ref c @ Cell::Empty{cell_status: CellStatus::Hidden, ..} => cell.set(c.new_status(CellStatus::Revealed)),
-            _ => (),
+
+        if *board_state.game_status.get() == GameStatus::InProgress {
+            match *cell.get() {
+                ref c @ Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: self_idx} => {
+                    cell.set(c.new_status(CellStatus::Revealed));
+
+                    let adjacent_list = board_state.get_adjacent(self_idx);
+                    for (x, y) in adjacent_list {
+                        let adj_idx = board_state.get_coord_index(&Coordinate(x, y));
+                        if self_idx != adj_idx {
+                            BoardState::cell_click(cx, &board_state.cells.get()[adj_idx]);
+                        }
+                    } 
+                },
+                ref c @ Cell::Empty{cell_status: CellStatus::Hidden, ..} => cell.set(c.new_status(CellStatus::Revealed)),
+                ref c @ Cell::Mine{cell_status: CellStatus::Hidden, ..}=> {
+                    cell.set(c.new_status(CellStatus::Revealed));
+                    board_state.game_status.set(GameStatus::Lost);
+                },
+                _ => (),
+            }
         }
+
+        if board_state.game_won() { board_state.game_status.set(GameStatus::Won) }
     }
 
     fn cell_aux_click(cx: Scope, cell: &RcSignal<Cell>, click: MouseEvent) {
@@ -214,41 +242,16 @@ impl BoardState {
         count
     }
 
-     fn reveal_adjacent(&self, i: usize) {
-        let adjacent_list =self.get_adjacent(i);
-
-        for (x, y) in adjacent_list {
-            let c = Coordinate(x, y);
-            let n = self.get_coord_index(&c);
-            let cell = self.cells.get()[n].get();
-
-            //let msg = format!("{:?}", cell);
-            //console::log_1(&msg.into());
-            
-            if let Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, ..} = *cell  {
-                if i != n {
-                    self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
-                    self.reveal_adjacent(n);
-                    //let msg = format!("revealed {n}");
-                    //console::log_1(&msg.into());
-                }
-                else {
-                    self.cells.get()[n].set(cell.new_status(CellStatus::Revealed));
-                    //let msg = format!("revealed {n}");
-                    //console::log_1(&msg.into());
-
-                }
-            } else { 
-                self.cells.get()[n].set(cell.new_status(CellStatus::Revealed)); 
-                //let msg = format!("revealed {n}");
-                //console::log_1(&msg.into());
-            } 
-
+    fn game_won (&self) -> bool {
+        let cells = self.cells.get();
+        for cell in cells.iter() {
+            if let Cell::Empty{cell_status: CellStatus::Hidden, ..} = *cell.get() { return false }
         }
+        true
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GameStatus {
     Won,
     Lost,
