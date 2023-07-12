@@ -15,8 +15,8 @@ use reset_button::ResetButton;
 use timer_display::TimerDisplay;
 
 #[derive(Debug, Clone)]
-pub struct BoardState {
-    cells: RcSignal<Vec<RcSignal<Cell>>>,
+pub struct BoardState<'a> {
+    cells: &'a Signal<Vec<RcSignal<Cell>>>,
     params: RcSignal<Params>,
     game_status: RcSignal<GameStatus>
 }
@@ -25,8 +25,11 @@ pub struct BoardState {
 pub fn Board<G: Html>(cx: Scope) -> View<G> {    
     let default_params = Params {height: 10, width: 10, mines: 10};
 
-    let board_state = BoardState::new(default_params);
-    provide_context(cx, board_state);
+    let board_state = BoardState::new(cx, default_params);
+
+    let board_state_ref = create_ref(cx, board_state);
+    provide_context_ref(cx, board_state_ref);
+    
     let board_state = use_context::<BoardState>(cx);
 
     let num_flags = create_signal(cx, 0isize);
@@ -56,8 +59,8 @@ pub fn Board<G: Html>(cx: Scope) -> View<G> {
 }
 
 
-impl BoardState {
-    fn new (params: Params) -> BoardState {
+impl BoardState<'_> {
+    fn new<'a> (cx: Scope<'a>, params: Params) -> BoardState<'a> {
         let Params {height, width, mines} = params;
         let mut cells = vec!(Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: 0}; height*width);
 
@@ -80,7 +83,7 @@ impl BoardState {
             .collect();
     
         let board_state = BoardState {
-            cells: create_rc_signal(cells),
+            cells: create_signal(cx, cells),
             params: create_rc_signal(params),
             game_status: create_rc_signal(GameStatus::InProgress),
         };
@@ -99,7 +102,7 @@ impl BoardState {
         let num_flags = use_context::<Signal<isize>>(cx);
         num_flags.set(0);
         
-        let new_state = Self::new(*params);
+        let new_state = Self::new(cx, *params);
         self.cells.set_rc(new_state.cells.get());
         self.params.set_rc(new_state.params.get());
         self.game_status.set_rc(new_state.game_status.get());
