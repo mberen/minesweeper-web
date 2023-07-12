@@ -8,7 +8,6 @@ pub fn BombDisplay<G: Html>(cx: Scope) -> View<G> {
         use_context::<BoardState>(cx).params.get().mines
     });
     
-    (*use_context::<BoardState>(cx).params.get()).mines;
     view! { cx,
         div (class="bomb display") {
             ((*num_bombs.get() as isize) - *num_flags.get())

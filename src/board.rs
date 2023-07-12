@@ -7,7 +7,7 @@ mod timer_display;
 use sycamore::prelude::*;
 use rand::thread_rng;
 use rand::seq::SliceRandom;
-use web_sys::{MouseEvent, console};
+use web_sys::MouseEvent;
 
 use options_menu::OptionsMenu;
 use bomb_display::BombDisplay;
@@ -23,7 +23,7 @@ pub struct BoardState {
 
 #[component]
 pub fn Board<G: Html>(cx: Scope) -> View<G> {    
-    let default_params = Params {height: 4, width: 4, mines: 1};
+    let default_params = Params {height: 10, width: 10, mines: 10};
 
     let board_state = BoardState::new(default_params);
     provide_context(cx, board_state);
@@ -33,7 +33,7 @@ pub fn Board<G: Html>(cx: Scope) -> View<G> {
     provide_context_ref(cx, num_flags);
 
     let style = create_memo(cx, || {
-        let width =  (*board_state.params.get()).width;
+        let width =  board_state.params.get().width;
         format!("--row-length: {}", width)
     });
 
@@ -60,10 +60,11 @@ impl BoardState {
     fn new (params: Params) -> BoardState {
         let Params {height, width, mines} = params;
         let mut cells = vec!(Cell::Empty{cell_status: CellStatus::Hidden, mines: 0, id: 0}; height*width);
-    
-        for i in 0..mines {
-            cells[i] = Cell::Mine{cell_status: CellStatus::Hidden, id: 0};
-        }
+
+        cells.iter_mut()
+            .take(mines)
+            .for_each(|cell| *cell = Cell::Mine{cell_status: CellStatus::Hidden, id: 0});
+
         cells.shuffle(&mut thread_rng());
         for (i, cell) in cells.iter_mut().enumerate() {
             match cell {
@@ -75,7 +76,7 @@ impl BoardState {
         let cells: Vec<RcSignal<Cell>> = 
             cells
             .into_iter()
-            .map(|c|create_rc_signal(c))
+            .map(create_rc_signal)
             .collect();
     
         let board_state = BoardState {
